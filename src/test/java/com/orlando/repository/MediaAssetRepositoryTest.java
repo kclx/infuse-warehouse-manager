@@ -27,6 +27,7 @@ class MediaAssetRepositoryTest {
         mediaAsset.season = 1;
         mediaAsset.episode = 4;
         mediaAsset.folderPath = "/Users/orlando/Documents/Program/warehouse-manager/data/data-target/Oujougiwa no Imi wo Shire!";
+        mediaAsset.fileName = "Oujougiwa no Imi wo Shire!_SP1EP4.mp4";
         mediaAsset.contentType = ContentType.SERIES;
         mediaAsset.subtitleFileNames = List.of("Oujougiwa no Imi wo Shire! EP04.srt");
 
@@ -39,6 +40,7 @@ class MediaAssetRepositoryTest {
         assertNotNull(saved, "应能按 id 查回刚插入的数据");
         assertEquals(mediaAsset.title, saved.title);
         assertEquals(mediaAsset.folderPath, saved.folderPath);
+        assertEquals(mediaAsset.fileName, saved.fileName);
         assertEquals(ContentType.SERIES, saved.contentType);
     }
 }

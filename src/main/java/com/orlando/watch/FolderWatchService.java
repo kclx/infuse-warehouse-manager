@@ -6,14 +6,13 @@ import jakarta.inject.Inject;
 
 import java.nio.file.*;
 
-import org.jboss.logging.Logger;
-
 import io.quarkus.runtime.Startup;
+import lombok.extern.slf4j.Slf4j;
 
 @ApplicationScoped
 @Startup
+@Slf4j
 public class FolderWatchService {
-    private static final Logger LOG = Logger.getLogger(FolderWatchService.class);
     private static final Path WATCH_PATH = Paths.get("/Users/orlando/Documents/Program/warehouse-manager/data");
 
     @Inject
@@ -21,7 +20,7 @@ public class FolderWatchService {
 
     @PostConstruct
     void start() {
-        LOG.info("文件监听器启动");
+        log.info("文件监听器启动");
         Thread watcherThread = new Thread(this::watch, "folder-watch-thread");
         watcherThread.setDaemon(true);
         watcherThread.start();
@@ -32,7 +31,7 @@ public class FolderWatchService {
         try {
             Files.createDirectories(WATCH_PATH);
 
-            LOG.infov("监听路径: {0}", WATCH_PATH);
+            log.info("监听路径: {}", WATCH_PATH);
 
             WatchService watchService = FileSystems.getDefault().newWatchService();
 
@@ -55,14 +54,14 @@ public class FolderWatchService {
 
                     FileProcessJob job = new FileProcessJob(WATCH_PATH, file.toString(), 0);
                     jobQueue.offer(job);
-                    LOG.infov("文件变化入队: {0}, queueSize={1}", job.fullPath(), jobQueue.size());
+                    log.info("文件变化入队: {}, queueSize={}", job.fullPath(), jobQueue.size());
                 }
 
                 key.reset();
             }
 
         } catch (Exception e) {
-            LOG.error("文件监听线程异常退出", e);
+            log.error("文件监听线程异常退出", e);
         }
     }
 }

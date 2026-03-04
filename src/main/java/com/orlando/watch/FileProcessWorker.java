@@ -5,8 +5,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
 
-import org.jboss.logging.Logger;
-
 import com.orlando.dto.FileNameParse;
 import com.orlando.service.FileNameParseService;
 
@@ -14,10 +12,11 @@ import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
+import lombok.extern.slf4j.Slf4j;
 
 @ApplicationScoped
+@Slf4j
 public class FileProcessWorker {
-    private static final Logger LOG = Logger.getLogger(FileProcessWorker.class);
     private static final int MAX_ATTEMPTS = 3;
 
     @Inject
@@ -36,7 +35,7 @@ public class FileProcessWorker {
 
         Path sourceFile = job.fullPath();
         if (!Files.exists(sourceFile) || !Files.isRegularFile(sourceFile)) {
-            LOG.warnv("跳过任务，文件不存在或不是普通文件: {0}", sourceFile);
+            log.warn("跳过任务，文件不存在或不是普通文件: {}", sourceFile);
             return;
         }
 
@@ -63,26 +62,26 @@ public class FileProcessWorker {
             Path targetFile = targetDir.resolve(targetFileName);
 
             if (sourceFile.equals(targetFile)) {
-                LOG.infov("文件已在目标位置: {0}", sourceFile);
+                log.info("文件已在目标位置: {}", sourceFile);
                 return;
             }
 
             Files.move(sourceFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
-            LOG.infov("处理成功: {0} -> {1}", sourceFile, targetFile);
+            log.info("处理成功: {} -> {}", sourceFile, targetFile);
         } catch (Exception e) {
             retry(job, "处理异常: " + e.getMessage());
-            LOG.errorv(e, "处理失败: {0}", sourceFile);
+            log.error("处理失败: {}", sourceFile, e);
         }
     }
 
     private void retry(FileProcessJob job, String reason) {
         if (job.attempts() + 1 >= MAX_ATTEMPTS) {
-            LOG.errorv("任务失败且超过最大重试次数({0}): {1}, reason={2}", MAX_ATTEMPTS, job.fullPath(), reason);
+            log.error("任务失败且超过最大重试次数({}): {}, reason={}", MAX_ATTEMPTS, job.fullPath(), reason);
             return;
         }
         FileProcessJob next = job.nextAttempt();
         jobQueue.offer(next);
-        LOG.warnv("任务重试({0}/{1}): {2}, reason={3}", next.attempts(), MAX_ATTEMPTS - 1, next.fullPath(), reason);
+        log.warn("任务重试({}/{}): {}, reason={}", next.attempts(), MAX_ATTEMPTS - 1, next.fullPath(), reason);
     }
 
     private boolean isFileReady(Path file) {
@@ -92,7 +91,7 @@ public class FileProcessWorker {
             long size2 = Files.size(file);
             return size1 == size2;
         } catch (Exception e) {
-            LOG.warnv("无法确认文件是否写入完成: {0}, reason={1}", file, e.getMessage());
+            log.warn("无法确认文件是否写入完成: {}, reason={}", file, e.getMessage());
             return false;
         }
     }

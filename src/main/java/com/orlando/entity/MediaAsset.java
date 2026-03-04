@@ -6,7 +6,9 @@ import java.util.List;
 import java.util.UUID;
 
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import io.quarkus.hibernate.orm.panache.PanacheEntityBase;
 import jakarta.persistence.CollectionTable;
@@ -27,6 +29,8 @@ public class MediaAsset extends PanacheEntityBase {
 
     @Id
     @GeneratedValue
+    @JdbcTypeCode(SqlTypes.CHAR)
+    @Column(name = "id", nullable = false, updatable = false, length = 36)
     public UUID id;
 
     @Column(name = "title", nullable = false, length = 255)
@@ -40,6 +44,9 @@ public class MediaAsset extends PanacheEntityBase {
 
     @Column(name = "folder_path", nullable = false, length = 1000)
     public String folderPath;
+
+    @Column(name = "file_name", length = 255)
+    public String fileName;
 
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "media_asset_subtitle_file", joinColumns = @JoinColumn(name = "media_asset_id"))

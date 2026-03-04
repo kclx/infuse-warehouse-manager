@@ -20,10 +20,11 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 @Startup
 @Slf4j
 public class FolderWatchService {
-    private static final Path WATCH_PATH = Paths.get("/Users/orlando/Documents/Program/warehouse-manager/data");
-
     @Inject
     FileJobQueue jobQueue;
+
+    @ConfigProperty(name = "watch.path", defaultValue = "/Users/orlando/Documents/Program/warehouse-manager/data")
+    String watchPath;
 
     @ConfigProperty(name = "watch.ignore-file-names", defaultValue = ".DS_Store")
     Set<String> ignoreFileNames;
@@ -43,13 +44,14 @@ public class FolderWatchService {
     void watch() {
 
         try {
-            Files.createDirectories(WATCH_PATH);
+            Path watchDir = Paths.get(watchPath);
+            Files.createDirectories(watchDir);
 
-            log.info("监听路径: {}", WATCH_PATH);
+            log.info("监听路径: {}", watchDir);
 
             WatchService watchService = FileSystems.getDefault().newWatchService();
 
-            WATCH_PATH.register(
+            watchDir.register(
                     watchService,
                     StandardWatchEventKinds.ENTRY_CREATE);
 
@@ -70,7 +72,7 @@ public class FolderWatchService {
                         continue;
                     }
 
-                    FileProcessJob job = new FileProcessJob(WATCH_PATH, file.toString(), 0);
+                    FileProcessJob job = new FileProcessJob(watchDir, file.toString(), 0);
                     jobQueue.offer(job);
                     log.info("文件变化入队: {}, queueSize={}", job.fullPath(), jobQueue.size());
                 }

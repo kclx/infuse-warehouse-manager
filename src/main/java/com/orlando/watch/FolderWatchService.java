@@ -26,15 +26,15 @@ public class FolderWatchService {
     @ConfigProperty(name = "watch.path", defaultValue = "/Users/orlando/Documents/Program/warehouse-manager/data")
     String watchPath;
 
-    @ConfigProperty(name = "watch.ignore-file-names", defaultValue = ".DS_Store")
-    Set<String> ignoreFileNames;
+    @ConfigProperty(name = "watch.allow-file-names", defaultValue = "re:.*\\.(mp4|mkv|ass|ssa|srt|vtt)$")
+    Set<String> allowFileNames;
 
-    private Set<String> exactIgnoreFileNames;
-    private List<Pattern> regexIgnoreFilePatterns;
+    private Set<String> exactAllowFileNames;
+    private List<Pattern> regexAllowFilePatterns;
 
     @PostConstruct
     void start() {
-        initIgnoreRules();
+        initAllowRules();
         log.info("文件监听器启动");
         Thread watcherThread = new Thread(this::watch, "folder-watch-thread");
         watcherThread.setDaemon(true);
@@ -67,8 +67,8 @@ public class FolderWatchService {
                     if (file == null) {
                         continue;
                     }
-                    if (shouldIgnore(file)) {
-                        log.debug("忽略文件: {}", file);
+                    if (!shouldProcess(file)) {
+                        log.debug("不在白名单内，跳过文件: {}", file);
                         continue;
                     }
 
@@ -85,12 +85,12 @@ public class FolderWatchService {
         }
     }
 
-    private boolean shouldIgnore(Path file) {
+    private boolean shouldProcess(Path file) {
         String fileName = file.getFileName() == null ? "" : file.getFileName().toString();
-        if (exactIgnoreFileNames.contains(fileName)) {
+        if (exactAllowFileNames.contains(fileName)) {
             return true;
         }
-        for (Pattern pattern : regexIgnoreFilePatterns) {
+        for (Pattern pattern : regexAllowFilePatterns) {
             if (pattern.matcher(fileName).matches()) {
                 return true;
             }
@@ -98,10 +98,10 @@ public class FolderWatchService {
         return false;
     }
 
-    private void initIgnoreRules() {
-        exactIgnoreFileNames = new HashSet<>();
-        regexIgnoreFilePatterns = new ArrayList<>();
-        for (String rawRule : ignoreFileNames) {
+    private void initAllowRules() {
+        exactAllowFileNames = new HashSet<>();
+        regexAllowFilePatterns = new ArrayList<>();
+        for (String rawRule : allowFileNames) {
             if (rawRule == null) {
                 continue;
             }
@@ -113,15 +113,15 @@ public class FolderWatchService {
             if (rule.startsWith("re:")) {
                 String regex = rule.substring(3).trim();
                 try {
-                    regexIgnoreFilePatterns.add(Pattern.compile(regex));
+                    regexAllowFilePatterns.add(Pattern.compile(regex));
                 } catch (PatternSyntaxException e) {
-                    log.warn("忽略规则正则非法，已跳过: {}", rule);
+                    log.warn("白名单规则正则非法，已跳过: {}", rule);
                 }
                 continue;
             }
 
-            exactIgnoreFileNames.add(rule);
+            exactAllowFileNames.add(rule);
         }
-        log.info("忽略规则加载完成: exact={}, regex={}", exactIgnoreFileNames.size(), regexIgnoreFilePatterns.size());
+        log.info("白名单规则加载完成: exact={}, regex={}", exactAllowFileNames.size(), regexAllowFilePatterns.size());
     }
 }

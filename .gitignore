@@ -74,3 +74,4 @@ nb-configuration.xml
 logs/
 mvnw
 mvnw.cmd
+data/

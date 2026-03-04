@@ -67,17 +67,21 @@
             <groupId>io.quarkiverse.mcp</groupId>
             <artifactId>quarkus-mcp-server-stdio</artifactId>
         </dependency>
-        <dependency>
+        <!-- <dependency>
             <groupId>io.quarkiverse.mcp</groupId>
             <artifactId>quarkus-mcp-server-http</artifactId>
-        </dependency>
-        <dependency>
+        </dependency> -->
+        <!-- <dependency>
             <groupId>io.quarkiverse.mcp</groupId>
             <artifactId>quarkus-mcp-server-hibernate-validator</artifactId>
-        </dependency>
+        </dependency> -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-arc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-scheduler</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

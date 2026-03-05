@@ -24,6 +24,7 @@ import com.orlando.watch.naming.OutputFileNameBuilder;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.context.control.ActivateRequestContext;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
@@ -34,11 +35,6 @@ import lombok.extern.slf4j.Slf4j;
 @ApplicationScoped
 @Slf4j
 public class FolderRenameBatchProcessor {
-
-    private static final String NAME_TOKEN = "<<NAME_TOKEN>>";
-    private static final String SEASON_TOKEN = "<<SEASON_TOKEN>>";
-    private static final String EPISODE_TOKEN = "<<EPISODE_TOKEN>>";
-    private static final String EXTENSION_TOKEN = "<<EXTENSION_TOKEN>>";
 
     @Inject
     OutputFileNameBuilder outputFileNameBuilder;
@@ -63,6 +59,7 @@ public class FolderRenameBatchProcessor {
     }
 
     @Transactional
+    @ActivateRequestContext
     public void processFolderRename(Path oldDirectory, Path newDirectory) {
         if (!Files.isDirectory(newDirectory)) {
             log.warn("目录改名处理跳过，目标目录不存在: {}", newDirectory);
@@ -76,8 +73,8 @@ public class FolderRenameBatchProcessor {
             return;
         }
 
-        Map<EpisodeKey, String> mediaFileNameByEpisode = new HashMap<>();
         Map<EpisodeKey, List<String>> subtitleFileNamesByEpisode = new HashMap<>();
+        Map<String, String> renamedFileMap = new HashMap<>();
 
         try {
             List<Path> files = Files.list(newDirectory)
@@ -103,10 +100,9 @@ public class FolderRenameBatchProcessor {
                 }
 
                 String finalFileName = target.getFileName().toString();
+                renamedFileMap.put(file.getFileName().toString(), finalFileName);
                 EpisodeKey key = new EpisodeKey(parsed.season(), parsed.episode());
-                if (isMediaExtension(parsed.extension())) {
-                    mediaFileNameByEpisode.put(key, finalFileName);
-                } else if (isSubtitleExtension(parsed.extension())) {
+                if (isSubtitleExtension(parsed.extension())) {
                     subtitleFileNamesByEpisode.computeIfAbsent(key, ignored -> new ArrayList<>()).add(finalFileName);
                 }
             }
@@ -115,7 +111,7 @@ public class FolderRenameBatchProcessor {
             return;
         }
 
-        updateSeriesDatabaseAfterFolderRename(oldDirectory, newDirectory, newTitle, mediaFileNameByEpisode, subtitleFileNamesByEpisode);
+        updateSeriesDatabaseAfterFolderRename(oldDirectory, newDirectory, newTitle, subtitleFileNamesByEpisode, renamedFileMap);
     }
 
     private void processMovieFolderRename(
@@ -162,8 +158,14 @@ public class FolderRenameBatchProcessor {
                 .flatMap(asset -> mediaAssetVideoFileRepository.listByMediaAssetId(asset.id).stream())
                 .collect(Collectors.toList());
         for (MediaAssetVideoFile videoFile : allVideoFiles) {
-            String mappedName = renamedFileMap.get(videoFile.fileName);
-            if (mappedName == null) {
+            String mappedName = resolveMovieMappedNameWhenFolderRenamed(
+                    newDirectory,
+                    newTitle,
+                    videoFile,
+                    renamedFileMap,
+                    reservedNames);
+            if (mappedName == null || mappedName.isBlank()) {
+                log.warn("电影视频文件记录缺少 fileName，跳过更新: videoFileId={}", videoFile.id);
                 continue;
             }
             videoFile.fileName = mappedName;
@@ -175,31 +177,92 @@ public class FolderRenameBatchProcessor {
         log.info("目录改名电影库同步完成: {} -> {}", oldDirectory.getFileName(), newDirectory.getFileName());
     }
 
+    /**
+     * 目录改名场景下兜底解析视频文件名映射：
+     * 1. 先使用本次批量文件重命名得到的映射；
+     * 2. 若映射缺失，按数据库记录尝试补做一次重命名；
+     * 3. 若仍无法重命名，至少保证路径切换到新目录。
+     */
+    private String resolveMovieMappedNameWhenFolderRenamed(
+            Path newDirectory,
+            String newTitle,
+            MediaAssetVideoFile videoFile,
+            Map<String, String> renamedFileMap,
+            Set<String> reservedNames) {
+        String currentFileName = videoFile.fileName;
+        if (currentFileName == null || currentFileName.isBlank()) {
+            return null;
+        }
+
+        String mappedName = renamedFileMap.get(currentFileName);
+        if (mappedName != null && !mappedName.isBlank()) {
+            reservedNames.add(mappedName);
+            return mappedName;
+        }
+
+        String editionTag = (videoFile.editionTag == null || videoFile.editionTag.isBlank())
+                ? movieFileNameResolver.extractEditionTag(currentFileName)
+                : videoFile.editionTag;
+        String extension = extensionOf(currentFileName);
+        String expectedFileName = resolveMovieRenameTargetName(
+                newDirectory,
+                newTitle,
+                editionTag,
+                extension,
+                currentFileName,
+                reservedNames);
+        Path currentPath = newDirectory.resolve(currentFileName);
+        Path targetPath = newDirectory.resolve(expectedFileName);
+
+        if (!currentFileName.equals(expectedFileName) && Files.exists(currentPath)) {
+            try {
+                Files.move(currentPath, targetPath);
+                log.info("目录改名触发电影文件兜底重命名: {} -> {}", currentFileName, expectedFileName);
+                renamedFileMap.put(currentFileName, expectedFileName);
+                reservedNames.add(expectedFileName);
+                return expectedFileName;
+            } catch (Exception ex) {
+                log.warn("目录改名电影文件兜底重命名失败，保留原文件名: {} -> {}", currentFileName, expectedFileName, ex);
+            }
+        }
+
+        // 目录已改名但文件名映射缺失时，至少保证 file_path 同步到新目录。
+        reservedNames.add(currentFileName);
+        return currentFileName;
+    }
+
     private void updateSeriesDatabaseAfterFolderRename(
             Path oldDirectory,
             Path newDirectory,
             String newTitle,
-            Map<EpisodeKey, String> mediaFileNameByEpisode,
-            Map<EpisodeKey, List<String>> subtitleFileNamesByEpisode) {
+            Map<EpisodeKey, List<String>> subtitleFileNamesByEpisode,
+            Map<String, String> renamedFileMap) {
         List<MediaAsset> assets = findAssetsByDirectory(oldDirectory, newDirectory);
 
         for (MediaAsset asset : assets) {
             asset.title = newTitle;
             asset.folderPath = newDirectory.toString();
+            asset.fileName = null;
 
             EpisodeKey key = new EpisodeKey(asset.season, asset.episode);
-            String mediaFileName = mediaFileNameByEpisode.get(key);
-            if (mediaFileName != null) {
-                asset.fileName = mediaFileName;
-            }
-
             List<String> subtitleNames = subtitleFileNamesByEpisode.get(key);
             if (subtitleNames != null) {
                 asset.subtitleFileNames = new ArrayList<>(subtitleNames);
             }
+
+            List<MediaAssetVideoFile> videoFiles = mediaAssetVideoFileRepository.listByMediaAssetId(asset.id);
+            for (MediaAssetVideoFile videoFile : videoFiles) {
+                String mappedName = renamedFileMap.get(videoFile.fileName);
+                if (mappedName != null) {
+                    videoFile.fileName = mappedName;
+                }
+                videoFile.filePath = newDirectory.resolve(videoFile.fileName).toString();
+                videoFile.editionTag = "正片";
+            }
         }
 
         mediaAssetRepository.flush();
+        mediaAssetVideoFileRepository.flush();
         log.info("目录改名数据库同步完成: {} -> {}", oldDirectory.getFileName(), newDirectory.getFileName());
     }
 
@@ -217,10 +280,6 @@ public class FolderRenameBatchProcessor {
                 Integer.parseInt(matcher.group("season")),
                 Integer.parseInt(matcher.group("episode")),
                 matcher.group("ext").toLowerCase(Locale.ROOT));
-    }
-
-    private boolean isMediaExtension(String extension) {
-        return normalizedSet(watchProcessingConfig.database().assetFileExtensions()).contains(extension.toLowerCase(Locale.ROOT));
     }
 
     private boolean isSubtitleExtension(String extension) {
@@ -243,28 +302,60 @@ public class FolderRenameBatchProcessor {
             return null;
         }
 
-        String tokenizedPattern = configuredPattern
-                .replace("{name}", NAME_TOKEN)
-                .replace("{snumber}", SEASON_TOKEN)
-                .replace("{enumber}", EPISODE_TOKEN)
-                .replace("{ext}", EXTENSION_TOKEN);
-
-        if (!tokenizedPattern.contains(SEASON_TOKEN)
-                || !tokenizedPattern.contains(EPISODE_TOKEN)
-                || !tokenizedPattern.contains(EXTENSION_TOKEN)) {
+        if (!configuredPattern.contains("{snumber}")
+                || !configuredPattern.contains("{enumber}")
+                || !configuredPattern.contains("{ext}")) {
             log.error("文件名模板缺少必要占位符(snumber/enumber/ext): {}", configuredPattern);
             return null;
         }
 
-        String regex = Pattern.quote(tokenizedPattern)
-                .replace(Pattern.quote(NAME_TOKEN), ".+?")
-                .replace(Pattern.quote(SEASON_TOKEN), "(?<season>\\\\d+)")
-                .replace(Pattern.quote(EPISODE_TOKEN), "(?<episode>\\\\d+)")
-                .replace(Pattern.quote(EXTENSION_TOKEN), "(?<ext>[^.]+)");
-
-        Pattern pattern = Pattern.compile("(?i)^" + regex + "$");
+        String regex = toEpisodeRegex(configuredPattern);
+        Pattern pattern = Pattern.compile(regex);
         log.info("目录改名解析规则已加载: {}", configuredPattern);
         return pattern;
+    }
+
+    private String toEpisodeRegex(String configuredPattern) {
+        StringBuilder regex = new StringBuilder("(?i)^");
+        int index = 0;
+        while (index < configuredPattern.length()) {
+            int next = configuredPattern.indexOf('{', index);
+            if (next < 0) {
+                regex.append(Pattern.quote(configuredPattern.substring(index)));
+                break;
+            }
+
+            if (next > index) {
+                regex.append(Pattern.quote(configuredPattern.substring(index, next)));
+            }
+
+            if (configuredPattern.startsWith("{name}", next)) {
+                regex.append(".+?");
+                index = next + "{name}".length();
+                continue;
+            }
+            if (configuredPattern.startsWith("{snumber}", next)) {
+                regex.append("(?<season>\\d+)");
+                index = next + "{snumber}".length();
+                continue;
+            }
+            if (configuredPattern.startsWith("{enumber}", next)) {
+                regex.append("(?<episode>\\d+)");
+                index = next + "{enumber}".length();
+                continue;
+            }
+            if (configuredPattern.startsWith("{ext}", next)) {
+                regex.append("(?<ext>[^.]+)");
+                index = next + "{ext}".length();
+                continue;
+            }
+
+            // 未识别占位符时按普通字符处理，保证行为可预期。
+            regex.append(Pattern.quote("{"));
+            index = next + 1;
+        }
+        regex.append("$");
+        return regex.toString();
     }
 
     private List<MediaAsset> findAssetsByDirectory(Path oldDirectory, Path newDirectory) {

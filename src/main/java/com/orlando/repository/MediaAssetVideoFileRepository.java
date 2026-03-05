@@ -19,4 +19,9 @@ public class MediaAssetVideoFileRepository implements PanacheRepositoryBase<Medi
     public List<MediaAssetVideoFile> listByMediaAssetId(UUID mediaAssetId) {
         return list("mediaAsset.id", mediaAssetId);
     }
+
+    public List<MediaAssetVideoFile> listMissingMetadata() {
+        return find("videoWidth is null or videoHeight is null or videoCodec is null or durationMs is null or fileSizeBytes is null")
+                .list();
+    }
 }

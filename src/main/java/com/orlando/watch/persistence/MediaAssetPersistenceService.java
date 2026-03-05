@@ -20,7 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * 负责媒体落库规则：
- * - 主媒体文件：创建或更新 `media_asset` 主记录
+ * - 视频文件：创建或更新 `media_asset` 元信息与 `media_asset_video_file` 明细
  * - 字幕文件：仅追加字幕名到 `media_asset_subtitle_file`
  */
 @ApplicationScoped
@@ -94,20 +94,18 @@ public class MediaAssetPersistenceService {
         mediaAsset.season = season;
         mediaAsset.episode = episode;
         mediaAsset.folderPath = targetDirectory.toString();
-        mediaAsset.fileName = singleEpisodeOnly ? null : targetFile.getFileName().toString();
+        mediaAsset.fileName = null;
         mediaAsset.contentType = singleEpisodeOnly ? MediaAsset.ContentType.MOVIE : MediaAsset.ContentType.SERIES;
         if (mediaAsset.subtitleFileNames == null) {
             mediaAsset.subtitleFileNames = new ArrayList<>();
         }
 
         mediaAssetRepository.persist(mediaAsset);
-        if (singleEpisodeOnly) {
-            upsertMovieVideoFile(mediaAsset, targetFile, editionTag);
-        }
+        upsertVideoFile(mediaAsset, targetFile, editionTag, singleEpisodeOnly);
         mediaAssetRepository.flush();
     }
 
-    private void upsertMovieVideoFile(MediaAsset mediaAsset, Path targetFile, String editionTag) {
+    private void upsertVideoFile(MediaAsset mediaAsset, Path targetFile, String editionTag, boolean singleEpisodeOnly) {
         String filePath = targetFile.toString();
         MediaAssetVideoFile videoFile = mediaAssetVideoFileRepository.findByFilePath(filePath).orElseGet(MediaAssetVideoFile::new);
         VideoMetadataProbeService.VideoMetadata metadata = videoMetadataProbeService.probe(targetFile);
@@ -122,7 +120,7 @@ public class MediaAssetPersistenceService {
         videoFile.videoCodec = metadata.videoCodec();
         videoFile.audioCodec = metadata.audioCodec();
         videoFile.durationMs = metadata.durationMs();
-        videoFile.editionTag = normalizeEditionTag(editionTag);
+        videoFile.editionTag = normalizeEditionTag(editionTag, singleEpisodeOnly);
         videoFile.isPrimary = Boolean.FALSE;
 
         mediaAssetVideoFileRepository.persist(videoFile);
@@ -179,7 +177,10 @@ public class MediaAssetPersistenceService {
         return extension == null ? "" : extension.trim().toLowerCase(Locale.ROOT);
     }
 
-    private String normalizeEditionTag(String editionTag) {
+    private String normalizeEditionTag(String editionTag, boolean singleEpisodeOnly) {
+        if (!singleEpisodeOnly) {
+            return "正片";
+        }
         if (editionTag == null || editionTag.isBlank()) {
             return "正片";
         }

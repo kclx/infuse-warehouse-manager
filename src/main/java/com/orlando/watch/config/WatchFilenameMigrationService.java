@@ -7,7 +7,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.orlando.entity.MediaAsset;
+import com.orlando.entity.MediaAssetVideoFile;
 import com.orlando.repository.MediaAssetRepository;
+import com.orlando.repository.MediaAssetVideoFileRepository;
 import com.orlando.watch.naming.OutputFileNameBuilder;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -25,6 +27,9 @@ public class WatchFilenameMigrationService {
     MediaAssetRepository mediaAssetRepository;
 
     @Inject
+    MediaAssetVideoFileRepository mediaAssetVideoFileRepository;
+
+    @Inject
     OutputFileNameBuilder outputFileNameBuilder;
 
     public void migrateAllAssetsToCurrentPattern() {
@@ -40,6 +45,7 @@ public class WatchFilenameMigrationService {
         }
 
         mediaAssetRepository.flush();
+        mediaAssetVideoFileRepository.flush();
         log.info("命名配置迁移完成: totalAssets={}, updatedAssets={}", totalAssets, updatedAssets);
     }
 
@@ -56,14 +62,20 @@ public class WatchFilenameMigrationService {
         Path folder = Path.of(asset.folderPath);
         boolean changed = false;
 
-        if (asset.fileName != null && !asset.fileName.isBlank()) {
-            String migratedAssetFileName = outputFileNameBuilder.build(
+        List<MediaAssetVideoFile> videoFiles = mediaAssetVideoFileRepository.listByMediaAssetId(asset.id);
+        for (MediaAssetVideoFile videoFile : videoFiles) {
+            String oldFileName = videoFile.fileName;
+            if (oldFileName == null || oldFileName.isBlank()) {
+                continue;
+            }
+            String newFileName = outputFileNameBuilder.build(
                     asset.title,
                     asset.season,
                     asset.episode,
-                    extensionOf(asset.fileName));
-            if (ensureMigratedOnDisk(folder, asset.fileName, migratedAssetFileName)) {
-                asset.fileName = migratedAssetFileName;
+                    extensionOf(oldFileName));
+            if (ensureMigratedOnDisk(folder, oldFileName, newFileName)) {
+                videoFile.fileName = newFileName;
+                videoFile.filePath = folder.resolve(newFileName).toString();
                 changed = true;
             }
         }

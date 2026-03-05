@@ -13,6 +13,7 @@ import com.orlando.watch.naming.MovieFileNameResolver;
 import com.orlando.watch.naming.OutputFileNameBuilder;
 import com.orlando.watch.persistence.MediaAssetPersistenceService;
 import com.orlando.watch.queue.FileWatchTaskQueue;
+import com.orlando.watch.service.TitleCandidateResolutionService;
 import com.orlando.watch.util.FileReadinessProbe;
 
 import io.quarkus.scheduler.Scheduled;
@@ -51,6 +52,9 @@ public class QueuedFileTaskProcessor {
 
     @Inject
     MediaAssetPersistenceService mediaAssetPersistenceService;
+
+    @Inject
+    TitleCandidateResolutionService titleCandidateResolutionService;
 
     @Scheduled(every = "1s")
     @ActivateRequestContext
@@ -91,18 +95,36 @@ public class QueuedFileTaskProcessor {
         }
 
         String normalizedTitle = mediaTitleNormalizer.normalize(parsedInfo.name());
+        String candidateTitle = titleCandidateResolutionService.resolveCanonicalTitle(originalFileName, parsedInfo.name());
+        if (candidateTitle != null && !candidateTitle.isBlank()) {
+            normalizedTitle = mediaTitleNormalizer.normalize(candidateTitle);
+        }
+
         String extension = extensionOf(originalFileName);
-        String editionTag = task.singleEpisodeOnly() ? movieFileNameResolver.extractEditionTag(originalFileName) : null;
+        String editionTag = null;
+        String outputFileName;
+        Path targetDirectory;
 
         Path targetRootDirectory = task.targetRootDirectory();
         Files.createDirectories(targetRootDirectory);
 
-        Path targetDirectory = targetRootDirectory.resolve(normalizedTitle);
-        Files.createDirectories(targetDirectory);
-
-        String outputFileName = task.singleEpisodeOnly()
-                ? movieFileNameResolver.resolveUniqueFileName(targetDirectory, normalizedTitle, editionTag, extension, Set.of())
-                : outputFileNameBuilder.build(normalizedTitle, parsedInfo.season(), parsedInfo.episode(), extension);
+        if (task.singleEpisodeOnly()) {
+            MovieFileNameResolver.MovieNamingResult movieNaming = movieFileNameResolver.resolveMovieNaming(
+                    originalFileName,
+                    normalizedTitle,
+                    extension,
+                    targetRootDirectory,
+                    Set.of());
+            normalizedTitle = movieNaming.title();
+            editionTag = movieNaming.editionTag();
+            targetDirectory = movieNaming.targetDirectory();
+            Files.createDirectories(targetDirectory);
+            outputFileName = movieNaming.fileName();
+        } else {
+            targetDirectory = targetRootDirectory.resolve(normalizedTitle);
+            Files.createDirectories(targetDirectory);
+            outputFileName = outputFileNameBuilder.build(normalizedTitle, parsedInfo.season(), parsedInfo.episode(), extension);
+        }
 
         if (mediaAssetPersistenceService.shouldPersistAsSubtitleOnly(extension)
                 && !mediaAssetPersistenceService.hasAssetRecord(parsedInfo, normalizedTitle, targetDirectory, task.singleEpisodeOnly())) {

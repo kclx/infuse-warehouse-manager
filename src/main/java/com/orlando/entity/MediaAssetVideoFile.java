@@ -48,7 +48,7 @@ public class MediaAssetVideoFile extends PanacheEntityBase {
     @Column(name = "file_name", nullable = false, length = 255)
     public String fileName;
 
-    @Column(name = "file_path", nullable = false, length = 1200)
+    @Column(name = "file_path", nullable = false, length = 700)
     public String filePath;
 
     @Column(name = "file_ext", length = 32)

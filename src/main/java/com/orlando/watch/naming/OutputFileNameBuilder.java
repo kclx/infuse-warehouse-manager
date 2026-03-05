@@ -36,6 +36,15 @@ public class OutputFileNameBuilder {
         return rendered;
     }
 
+    public String buildSingleEpisode(String normalizedTitle, String extension) {
+        String safeName = normalizedTitle == null ? "" : normalizedTitle.trim();
+        String safeExtension = extension == null ? "" : extension.trim();
+        if (safeExtension.isBlank()) {
+            return safeName;
+        }
+        return safeName + "." + safeExtension;
+    }
+
     private int normalizeWidth(int width) {
         return width < 1 ? 2 : width;
     }

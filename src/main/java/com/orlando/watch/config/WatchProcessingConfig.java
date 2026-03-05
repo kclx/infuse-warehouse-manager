@@ -51,5 +51,9 @@ public interface WatchProcessingConfig {
 
         @WithName("target-path")
         String targetPath();
+
+        @WithName("single-episode-only")
+        @WithDefault("false")
+        boolean singleEpisodeOnly();
     }
 }

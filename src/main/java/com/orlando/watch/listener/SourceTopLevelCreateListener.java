@@ -51,7 +51,8 @@ public class SourceTopLevelCreateListener {
             String groupName = entry.getKey();
             Path sourceRoot = Paths.get(entry.getValue().path());
             Path targetRoot = Paths.get(entry.getValue().targetPath());
-            SourceWatchWorker worker = new SourceWatchWorker(groupName, sourceRoot, targetRoot);
+            boolean singleEpisodeOnly = entry.getValue().singleEpisodeOnly();
+            SourceWatchWorker worker = new SourceWatchWorker(groupName, sourceRoot, targetRoot, singleEpisodeOnly);
             worker.start();
             workers.add(worker);
         }
@@ -109,6 +110,7 @@ public class SourceTopLevelCreateListener {
         FileWatchTask task = new FileWatchTask(
                 worker.sourceRoot(),
                 worker.targetRoot(),
+                worker.singleEpisodeOnly(),
                 relativePath.toString(),
                 0);
         fileWatchTaskQueue.offer(task);
@@ -120,13 +122,15 @@ public class SourceTopLevelCreateListener {
         private final String groupName;
         private final Path sourceRoot;
         private final Path targetRoot;
+        private final boolean singleEpisodeOnly;
         private final WatchService watchService;
         private final Thread thread;
 
-        private SourceWatchWorker(String groupName, Path sourceRoot, Path targetRoot) {
+        private SourceWatchWorker(String groupName, Path sourceRoot, Path targetRoot, boolean singleEpisodeOnly) {
             this.groupName = groupName;
             this.sourceRoot = sourceRoot;
             this.targetRoot = targetRoot;
+            this.singleEpisodeOnly = singleEpisodeOnly;
             try {
                 this.watchService = FileSystems.getDefault().newWatchService();
             } catch (Exception ex) {
@@ -159,6 +163,10 @@ public class SourceTopLevelCreateListener {
 
         private Path targetRoot() {
             return targetRoot;
+        }
+
+        private boolean singleEpisodeOnly() {
+            return singleEpisodeOnly;
         }
 
         private WatchService watchService() {

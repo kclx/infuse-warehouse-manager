@@ -80,7 +80,7 @@ public class QueuedFileTaskProcessor {
         ParsedMediaFileInfo parsedInfo = mediaFileNameParsingAiService.parse(originalFileName);
         log.info("fileNameParse: {}", parsedInfo);
 
-        if (parsedInfo == null || !parsedInfo.isUsable()) {
+        if (!isUsableForTask(parsedInfo, task.singleEpisodeOnly())) {
             retry(task, "AI 未能稳定识别 name/episode");
             return;
         }
@@ -88,11 +88,9 @@ public class QueuedFileTaskProcessor {
         String normalizedTitle = mediaTitleNormalizer.normalize(parsedInfo.name());
         String extension = extensionOf(originalFileName);
 
-        String outputFileName = outputFileNameBuilder.build(
-                normalizedTitle,
-                parsedInfo.season(),
-                parsedInfo.episode(),
-                extension);
+        String outputFileName = task.singleEpisodeOnly()
+                ? outputFileNameBuilder.buildSingleEpisode(normalizedTitle, extension)
+                : outputFileNameBuilder.build(normalizedTitle, parsedInfo.season(), parsedInfo.episode(), extension);
 
         Path targetRootDirectory = task.targetRootDirectory();
         Files.createDirectories(targetRootDirectory);
@@ -101,7 +99,7 @@ public class QueuedFileTaskProcessor {
         Files.createDirectories(targetDirectory);
 
         if (mediaAssetPersistenceService.shouldPersistAsSubtitleOnly(extension)
-                && !mediaAssetPersistenceService.hasAssetRecord(parsedInfo, normalizedTitle, targetDirectory)) {
+                && !mediaAssetPersistenceService.hasAssetRecord(parsedInfo, normalizedTitle, targetDirectory, task.singleEpisodeOnly())) {
             retry(task, "字幕文件对应的主媒体记录不存在");
             return;
         }
@@ -118,8 +116,19 @@ public class QueuedFileTaskProcessor {
                 normalizedTitle,
                 extension,
                 targetDirectory,
-                targetFile);
+                targetFile,
+                task.singleEpisodeOnly());
         log.info("处理成功: {} -> {}", sourceFile, targetFile);
+    }
+
+    private boolean isUsableForTask(ParsedMediaFileInfo parsedInfo, boolean singleEpisodeOnly) {
+        if (parsedInfo == null || parsedInfo.name() == null || parsedInfo.name().isBlank()) {
+            return false;
+        }
+        if (singleEpisodeOnly) {
+            return true;
+        }
+        return parsedInfo.isUsable();
     }
 
     private void retry(FileWatchTask task, String reason) {

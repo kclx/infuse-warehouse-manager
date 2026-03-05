@@ -47,15 +47,25 @@ public class MediaAssetPersistenceService {
                 targetDirectory.toString()).isPresent();
     }
 
+    public boolean hasAssetRecord(ParsedMediaFileInfo parsedInfo, String normalizedTitle, Path targetDirectory, boolean singleEpisodeOnly) {
+        Integer season = singleEpisodeOnly ? null : parsedInfo.season();
+        Integer episode = singleEpisodeOnly ? null : parsedInfo.episode();
+        return mediaAssetRepository.findByEpisodeKey(
+                normalizedTitle,
+                season,
+                episode,
+                targetDirectory.toString()).isPresent();
+    }
+
     public void persistByExtension(ParsedMediaFileInfo parsedInfo, String normalizedTitle, String extension,
-            Path targetDirectory, Path targetFile) {
+            Path targetDirectory, Path targetFile, boolean singleEpisodeOnly) {
         if (canPersistAsAsset(extension)) {
-            upsertMediaAsset(parsedInfo, normalizedTitle, targetDirectory, targetFile);
+            upsertMediaAsset(parsedInfo, normalizedTitle, targetDirectory, targetFile, singleEpisodeOnly);
             return;
         }
 
         if (shouldPersistAsSubtitleOnly(extension)) {
-            appendSubtitleFile(parsedInfo, normalizedTitle, targetDirectory, targetFile);
+            appendSubtitleFile(parsedInfo, normalizedTitle, targetDirectory, targetFile, singleEpisodeOnly);
             return;
         }
 
@@ -63,19 +73,21 @@ public class MediaAssetPersistenceService {
     }
 
     private void upsertMediaAsset(ParsedMediaFileInfo parsedInfo, String normalizedTitle, Path targetDirectory,
-            Path targetFile) {
+            Path targetFile, boolean singleEpisodeOnly) {
+        Integer season = singleEpisodeOnly ? null : parsedInfo.season();
+        Integer episode = singleEpisodeOnly ? null : parsedInfo.episode();
         MediaAsset mediaAsset = mediaAssetRepository.findByEpisodeKey(
                 normalizedTitle,
-                parsedInfo.season(),
-                parsedInfo.episode(),
+                season,
+                episode,
                 targetDirectory.toString()).orElseGet(MediaAsset::new);
 
         mediaAsset.title = normalizedTitle;
-        mediaAsset.season = parsedInfo.season();
-        mediaAsset.episode = parsedInfo.episode();
+        mediaAsset.season = season;
+        mediaAsset.episode = episode;
         mediaAsset.folderPath = targetDirectory.toString();
         mediaAsset.fileName = targetFile.getFileName().toString();
-        mediaAsset.contentType = MediaAsset.ContentType.SERIES;
+        mediaAsset.contentType = singleEpisodeOnly ? MediaAsset.ContentType.MOVIE : MediaAsset.ContentType.SERIES;
         if (mediaAsset.subtitleFileNames == null) {
             mediaAsset.subtitleFileNames = new ArrayList<>();
         }
@@ -85,11 +97,13 @@ public class MediaAssetPersistenceService {
     }
 
     private void appendSubtitleFile(ParsedMediaFileInfo parsedInfo, String normalizedTitle, Path targetDirectory,
-            Path targetFile) {
+            Path targetFile, boolean singleEpisodeOnly) {
+        Integer season = singleEpisodeOnly ? null : parsedInfo.season();
+        Integer episode = singleEpisodeOnly ? null : parsedInfo.episode();
         Optional<MediaAsset> existing = mediaAssetRepository.findByEpisodeKey(
                 normalizedTitle,
-                parsedInfo.season(),
-                parsedInfo.episode(),
+                season,
+                episode,
                 targetDirectory.toString());
 
         if (existing.isEmpty()) {

@@ -60,6 +60,7 @@ public class WatchConfigurationSyncService {
             String groupKeyPrefix = "watch.group." + entry.getKey();
             snapshot.put(groupKeyPrefix + ".path", entry.getValue().path());
             snapshot.put(groupKeyPrefix + ".target-path", entry.getValue().targetPath());
+            snapshot.put(groupKeyPrefix + ".single-episode-only", String.valueOf(entry.getValue().singleEpisodeOnly()));
         }
         snapshot.put("watch.allow-file-names", joinSet(watchProcessingConfig.allowFileNames()));
         snapshot.put("watch.filename.pattern", watchProcessingConfig.filename().pattern());

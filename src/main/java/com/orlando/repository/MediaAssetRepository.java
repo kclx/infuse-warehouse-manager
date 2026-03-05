@@ -13,7 +13,8 @@ public class MediaAssetRepository implements PanacheRepositoryBase<MediaAsset, U
 
     public Optional<MediaAsset> findByEpisodeKey(String title, Integer season, Integer episode, String folderPath) {
         return find(
-                "title = ?1 and season = ?2 and episode = ?3 and folderPath = ?4",
+                "title = ?1 and ((?2 is null and season is null) or season = ?2) and "
+                        + "((?3 is null and episode is null) or episode = ?3) and folderPath = ?4",
                 title,
                 season,
                 episode,

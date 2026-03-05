@@ -2,6 +2,7 @@ package com.orlando.watch.config;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,9 @@ import lombok.extern.slf4j.Slf4j;
 public class WatchConfigurationSyncService {
 
     private static final String CONFIG_SOURCE = "watch-processing.properties";
+    private static final String KEY_FILE_NAME_PATTERN = "watch.filename.pattern";
+    private static final String KEY_EPISODE_NUMBER_WIDTH = "watch.filename.episode-number-width";
+    private static final String KEY_SEASON_NUMBER_WIDTH = "watch.filename.season-number-width";
 
     @Inject
     WatchProcessingConfig watchProcessingConfig;
@@ -34,12 +38,19 @@ public class WatchConfigurationSyncService {
     @Inject
     WatchConfigEntryRepository watchConfigEntryRepository;
 
+    @Inject
+    WatchFilenameMigrationService watchFilenameMigrationService;
+
     @Transactional
     void syncOnStartup(@Observes StartupEvent event) {
         Map<String, String> currentConfig = buildCurrentConfigSnapshot();
         Map<String, WatchConfigEntry> databaseConfig = loadDatabaseSnapshot();
 
-        logDifferences(currentConfig, databaseConfig);
+        ChangeSummary changeSummary = logDifferences(currentConfig, databaseConfig);
+        if (requiresFileNameMigration(changeSummary.changedKeys())) {
+            log.info("检测到命名配置变更，开始迁移数据库记录与磁盘文件");
+            watchFilenameMigrationService.migrateAllAssetsToCurrentPattern();
+        }
         syncToDatabase(currentConfig, databaseConfig);
     }
 
@@ -72,7 +83,7 @@ public class WatchConfigurationSyncService {
         return snapshot;
     }
 
-    private void logDifferences(Map<String, String> currentConfig, Map<String, WatchConfigEntry> databaseConfig) {
+    private ChangeSummary logDifferences(Map<String, String> currentConfig, Map<String, WatchConfigEntry> databaseConfig) {
         List<String> addedKeys = new ArrayList<>();
         List<String> changedKeys = new ArrayList<>();
         List<String> removedKeys = new ArrayList<>();
@@ -100,7 +111,7 @@ public class WatchConfigurationSyncService {
 
         if (addedKeys.isEmpty() && changedKeys.isEmpty() && removedKeys.isEmpty()) {
             log.info("配置检查完成：数据库与当前 properties 无差异");
-            return;
+            return new ChangeSummary(Set.of(), Set.of(), Set.of());
         }
 
         if (!addedKeys.isEmpty()) {
@@ -112,6 +123,11 @@ public class WatchConfigurationSyncService {
         if (!removedKeys.isEmpty()) {
             log.info("配置删除项: {}", removedKeys);
         }
+
+        return new ChangeSummary(
+                new HashSet<>(addedKeys),
+                new HashSet<>(changedKeys),
+                new HashSet<>(removedKeys));
     }
 
     private void syncToDatabase(Map<String, String> currentConfig, Map<String, WatchConfigEntry> databaseConfig) {
@@ -153,5 +169,14 @@ public class WatchConfigurationSyncService {
         }
         Collections.sort(sortedValues);
         return String.join(",", sortedValues);
+    }
+
+    private boolean requiresFileNameMigration(Set<String> changedKeys) {
+        return changedKeys.contains(KEY_FILE_NAME_PATTERN)
+                || changedKeys.contains(KEY_EPISODE_NUMBER_WIDTH)
+                || changedKeys.contains(KEY_SEASON_NUMBER_WIDTH);
+    }
+
+    private record ChangeSummary(Set<String> addedKeys, Set<String> changedKeys, Set<String> removedKeys) {
     }
 }

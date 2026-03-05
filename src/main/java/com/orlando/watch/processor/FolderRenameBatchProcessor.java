@@ -2,7 +2,6 @@ package com.orlando.watch.processor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -13,15 +12,19 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import com.orlando.entity.MediaAsset;
+import com.orlando.entity.MediaAssetVideoFile;
 import com.orlando.repository.MediaAssetRepository;
+import com.orlando.repository.MediaAssetVideoFileRepository;
 import com.orlando.watch.config.WatchProcessingConfig;
+import com.orlando.watch.naming.MovieFileNameResolver;
 import com.orlando.watch.naming.OutputFileNameBuilder;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.annotation.PostConstruct;
 import jakarta.transaction.Transactional;
 import lombok.extern.slf4j.Slf4j;
 
@@ -41,10 +44,16 @@ public class FolderRenameBatchProcessor {
     OutputFileNameBuilder outputFileNameBuilder;
 
     @Inject
+    MovieFileNameResolver movieFileNameResolver;
+
+    @Inject
     WatchProcessingConfig watchProcessingConfig;
 
     @Inject
     MediaAssetRepository mediaAssetRepository;
+
+    @Inject
+    MediaAssetVideoFileRepository mediaAssetVideoFileRepository;
 
     private Pattern episodeFilePattern;
 
@@ -61,6 +70,12 @@ public class FolderRenameBatchProcessor {
         }
 
         String newTitle = newDirectory.getFileName().toString();
+        List<MediaAsset> assets = findAssetsByDirectory(oldDirectory, newDirectory);
+        if (isMovieMode(assets)) {
+            processMovieFolderRename(oldDirectory, newDirectory, newTitle, assets);
+            return;
+        }
+
         Map<EpisodeKey, String> mediaFileNameByEpisode = new HashMap<>();
         Map<EpisodeKey, List<String>> subtitleFileNamesByEpisode = new HashMap<>();
 
@@ -80,15 +95,19 @@ public class FolderRenameBatchProcessor {
                 String newFileName = outputFileNameBuilder.build(newTitle, parsed.season(), parsed.episode(), parsed.extension());
                 Path target = newDirectory.resolve(newFileName);
                 if (!file.equals(target)) {
-                    Files.move(file, target, StandardCopyOption.REPLACE_EXISTING);
+                    if (Files.exists(target)) {
+                        target = resolveNonConflictingSeriesTarget(newDirectory, newFileName);
+                    }
+                    Files.move(file, target);
                     log.info("目录改名触发文件重命名: {} -> {}", file.getFileName(), target.getFileName());
                 }
 
+                String finalFileName = target.getFileName().toString();
                 EpisodeKey key = new EpisodeKey(parsed.season(), parsed.episode());
                 if (isMediaExtension(parsed.extension())) {
-                    mediaFileNameByEpisode.put(key, newFileName);
+                    mediaFileNameByEpisode.put(key, finalFileName);
                 } else if (isSubtitleExtension(parsed.extension())) {
-                    subtitleFileNamesByEpisode.computeIfAbsent(key, ignored -> new ArrayList<>()).add(newFileName);
+                    subtitleFileNamesByEpisode.computeIfAbsent(key, ignored -> new ArrayList<>()).add(finalFileName);
                 }
             }
         } catch (Exception ex) {
@@ -96,19 +115,73 @@ public class FolderRenameBatchProcessor {
             return;
         }
 
-        updateDatabaseAfterFolderRename(oldDirectory, newDirectory, newTitle, mediaFileNameByEpisode, subtitleFileNamesByEpisode);
+        updateSeriesDatabaseAfterFolderRename(oldDirectory, newDirectory, newTitle, mediaFileNameByEpisode, subtitleFileNamesByEpisode);
     }
 
-    private void updateDatabaseAfterFolderRename(
+    private void processMovieFolderRename(
+            Path oldDirectory,
+            Path newDirectory,
+            String newTitle,
+            List<MediaAsset> assets) {
+        Map<String, String> renamedFileMap = new HashMap<>();
+        Set<String> reservedNames = new HashSet<>();
+
+        try {
+            List<Path> files = Files.list(newDirectory)
+                    .filter(Files::isRegularFile)
+                    .sorted(Comparator.comparing(path -> path.getFileName().toString()))
+                    .toList();
+
+            for (Path file : files) {
+                String oldFileName = file.getFileName().toString();
+                String extension = extensionOf(oldFileName);
+                String editionTag = movieFileNameResolver.extractEditionTag(oldFileName);
+                String newFileName = resolveMovieRenameTargetName(newDirectory, newTitle, editionTag, extension, oldFileName, reservedNames);
+                Path target = newDirectory.resolve(newFileName);
+
+                if (!oldFileName.equals(newFileName)) {
+                    Files.move(file, target);
+                    log.info("目录改名触发电影文件重命名: {} -> {}", oldFileName, newFileName);
+                }
+                reservedNames.add(newFileName);
+                renamedFileMap.put(oldFileName, newFileName);
+            }
+        } catch (Exception ex) {
+            log.error("目录改名电影文件批量重命名失败: {}", newDirectory, ex);
+            return;
+        }
+
+        for (MediaAsset asset : assets) {
+            asset.title = newTitle;
+            asset.folderPath = newDirectory.toString();
+            asset.fileName = null;
+        }
+        mediaAssetRepository.flush();
+
+        List<MediaAssetVideoFile> allVideoFiles = assets.stream()
+                .flatMap(asset -> mediaAssetVideoFileRepository.listByMediaAssetId(asset.id).stream())
+                .collect(Collectors.toList());
+        for (MediaAssetVideoFile videoFile : allVideoFiles) {
+            String mappedName = renamedFileMap.get(videoFile.fileName);
+            if (mappedName == null) {
+                continue;
+            }
+            videoFile.fileName = mappedName;
+            videoFile.filePath = newDirectory.resolve(mappedName).toString();
+            videoFile.editionTag = movieFileNameResolver.extractEditionTag(mappedName);
+        }
+        mediaAssetVideoFileRepository.flush();
+
+        log.info("目录改名电影库同步完成: {} -> {}", oldDirectory.getFileName(), newDirectory.getFileName());
+    }
+
+    private void updateSeriesDatabaseAfterFolderRename(
             Path oldDirectory,
             Path newDirectory,
             String newTitle,
             Map<EpisodeKey, String> mediaFileNameByEpisode,
             Map<EpisodeKey, List<String>> subtitleFileNamesByEpisode) {
-        List<MediaAsset> assets = mediaAssetRepository.list("folderPath", oldDirectory.toString());
-        if (assets.isEmpty()) {
-            assets = mediaAssetRepository.list("folderPath", newDirectory.toString());
-        }
+        List<MediaAsset> assets = findAssetsByDirectory(oldDirectory, newDirectory);
 
         for (MediaAsset asset : assets) {
             asset.title = newTitle;
@@ -192,6 +265,89 @@ public class FolderRenameBatchProcessor {
         Pattern pattern = Pattern.compile("(?i)^" + regex + "$");
         log.info("目录改名解析规则已加载: {}", configuredPattern);
         return pattern;
+    }
+
+    private List<MediaAsset> findAssetsByDirectory(Path oldDirectory, Path newDirectory) {
+        List<MediaAsset> assets = mediaAssetRepository.list("folderPath", oldDirectory.toString());
+        if (assets.isEmpty()) {
+            assets = mediaAssetRepository.list("folderPath", newDirectory.toString());
+        }
+        return assets;
+    }
+
+    private boolean isMovieMode(List<MediaAsset> assets) {
+        if (assets.isEmpty()) {
+            return false;
+        }
+        for (MediaAsset asset : assets) {
+            if (asset.contentType == MediaAsset.ContentType.MOVIE || (asset.season == null && asset.episode == null)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Path resolveNonConflictingSeriesTarget(Path directory, String desiredFileName) {
+        String extension = extensionOf(desiredFileName);
+        String baseName = stripExtension(desiredFileName);
+        String suffix = extension.isBlank() ? "" : "." + extension;
+        int sequence = 2;
+        String candidate = baseName + "_" + sequence + suffix;
+        while (Files.exists(directory.resolve(candidate))) {
+            sequence++;
+            candidate = baseName + "_" + sequence + suffix;
+        }
+        return directory.resolve(candidate);
+    }
+
+    private String stripExtension(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0) {
+            return fileName;
+        }
+        return fileName.substring(0, dotIndex);
+    }
+
+    private String extensionOf(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
+            return "";
+        }
+        return fileName.substring(dotIndex + 1).toLowerCase(Locale.ROOT);
+    }
+
+    private String resolveMovieRenameTargetName(
+            Path directory,
+            String title,
+            String editionTag,
+            String extension,
+            String currentFileName,
+            Set<String> reservedNames) {
+        String baseName = movieFileNameResolver.buildMovieBaseName(title, editionTag);
+        String suffix = extension.isBlank() ? "" : "." + extension;
+        String candidate = baseName + suffix;
+        if (!isOccupied(directory, candidate, currentFileName, reservedNames)) {
+            return candidate;
+        }
+
+        int sequence = 2;
+        while (true) {
+            candidate = baseName + "_" + sequence + suffix;
+            if (!isOccupied(directory, candidate, currentFileName, reservedNames)) {
+                return candidate;
+            }
+            sequence++;
+        }
+    }
+
+    private boolean isOccupied(Path directory, String candidate, String currentFileName, Set<String> reservedNames) {
+        if (candidate.equals(currentFileName)) {
+            return false;
+        }
+        if (reservedNames.contains(candidate)) {
+            return true;
+        }
+        return Files.exists(directory.resolve(candidate));
     }
 
     private record EpisodeKey(Integer season, Integer episode) {

@@ -8,8 +8,10 @@ import java.util.Optional;
 import java.util.Set;
 
 import com.orlando.entity.MediaAsset;
+import com.orlando.entity.MediaAssetVideoFile;
 import com.orlando.media.model.ParsedMediaFileInfo;
 import com.orlando.repository.MediaAssetRepository;
+import com.orlando.repository.MediaAssetVideoFileRepository;
 import com.orlando.watch.config.WatchProcessingConfig;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -30,6 +32,12 @@ public class MediaAssetPersistenceService {
 
     @Inject
     MediaAssetRepository mediaAssetRepository;
+
+    @Inject
+    MediaAssetVideoFileRepository mediaAssetVideoFileRepository;
+
+    @Inject
+    VideoMetadataProbeService videoMetadataProbeService;
 
     public boolean shouldPersistAsSubtitleOnly(String extension) {
         return subtitleExtensions().contains(normalizeExtension(extension));
@@ -58,9 +66,9 @@ public class MediaAssetPersistenceService {
     }
 
     public void persistByExtension(ParsedMediaFileInfo parsedInfo, String normalizedTitle, String extension,
-            Path targetDirectory, Path targetFile, boolean singleEpisodeOnly) {
+            Path targetDirectory, Path targetFile, boolean singleEpisodeOnly, String editionTag) {
         if (canPersistAsAsset(extension)) {
-            upsertMediaAsset(parsedInfo, normalizedTitle, targetDirectory, targetFile, singleEpisodeOnly);
+            upsertMediaAsset(parsedInfo, normalizedTitle, targetDirectory, targetFile, singleEpisodeOnly, editionTag);
             return;
         }
 
@@ -73,7 +81,7 @@ public class MediaAssetPersistenceService {
     }
 
     private void upsertMediaAsset(ParsedMediaFileInfo parsedInfo, String normalizedTitle, Path targetDirectory,
-            Path targetFile, boolean singleEpisodeOnly) {
+            Path targetFile, boolean singleEpisodeOnly, String editionTag) {
         Integer season = singleEpisodeOnly ? null : parsedInfo.season();
         Integer episode = singleEpisodeOnly ? null : parsedInfo.episode();
         MediaAsset mediaAsset = mediaAssetRepository.findByEpisodeKey(
@@ -86,14 +94,39 @@ public class MediaAssetPersistenceService {
         mediaAsset.season = season;
         mediaAsset.episode = episode;
         mediaAsset.folderPath = targetDirectory.toString();
-        mediaAsset.fileName = targetFile.getFileName().toString();
+        mediaAsset.fileName = singleEpisodeOnly ? null : targetFile.getFileName().toString();
         mediaAsset.contentType = singleEpisodeOnly ? MediaAsset.ContentType.MOVIE : MediaAsset.ContentType.SERIES;
         if (mediaAsset.subtitleFileNames == null) {
             mediaAsset.subtitleFileNames = new ArrayList<>();
         }
 
         mediaAssetRepository.persist(mediaAsset);
+        if (singleEpisodeOnly) {
+            upsertMovieVideoFile(mediaAsset, targetFile, editionTag);
+        }
         mediaAssetRepository.flush();
+    }
+
+    private void upsertMovieVideoFile(MediaAsset mediaAsset, Path targetFile, String editionTag) {
+        String filePath = targetFile.toString();
+        MediaAssetVideoFile videoFile = mediaAssetVideoFileRepository.findByFilePath(filePath).orElseGet(MediaAssetVideoFile::new);
+        VideoMetadataProbeService.VideoMetadata metadata = videoMetadataProbeService.probe(targetFile);
+
+        videoFile.mediaAsset = mediaAsset;
+        videoFile.fileName = targetFile.getFileName().toString();
+        videoFile.filePath = filePath;
+        videoFile.fileExt = extensionOf(videoFile.fileName);
+        videoFile.fileSizeBytes = metadata.fileSizeBytes();
+        videoFile.videoWidth = metadata.videoWidth();
+        videoFile.videoHeight = metadata.videoHeight();
+        videoFile.videoCodec = metadata.videoCodec();
+        videoFile.audioCodec = metadata.audioCodec();
+        videoFile.durationMs = metadata.durationMs();
+        videoFile.editionTag = normalizeEditionTag(editionTag);
+        videoFile.isPrimary = Boolean.FALSE;
+
+        mediaAssetVideoFileRepository.persist(videoFile);
+        mediaAssetVideoFileRepository.flush();
     }
 
     private void appendSubtitleFile(ParsedMediaFileInfo parsedInfo, String normalizedTitle, Path targetDirectory,
@@ -144,5 +177,20 @@ public class MediaAssetPersistenceService {
 
     private String normalizeExtension(String extension) {
         return extension == null ? "" : extension.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeEditionTag(String editionTag) {
+        if (editionTag == null || editionTag.isBlank()) {
+            return "正片";
+        }
+        return editionTag.trim();
+    }
+
+    private String extensionOf(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0 || dotIndex == fileName.length() - 1) {
+            return "";
+        }
+        return fileName.substring(dotIndex + 1).toLowerCase(Locale.ROOT);
     }
 }

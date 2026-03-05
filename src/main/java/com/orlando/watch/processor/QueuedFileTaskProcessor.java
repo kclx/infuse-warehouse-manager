@@ -2,12 +2,14 @@ package com.orlando.watch.processor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.util.HashSet;
+import java.util.Set;
 
 import com.orlando.media.ai.MediaFileNameParsingAiService;
 import com.orlando.media.model.ParsedMediaFileInfo;
 import com.orlando.watch.model.FileWatchTask;
 import com.orlando.watch.naming.MediaTitleNormalizer;
+import com.orlando.watch.naming.MovieFileNameResolver;
 import com.orlando.watch.naming.OutputFileNameBuilder;
 import com.orlando.watch.persistence.MediaAssetPersistenceService;
 import com.orlando.watch.queue.FileWatchTaskQueue;
@@ -40,6 +42,9 @@ public class QueuedFileTaskProcessor {
 
     @Inject
     OutputFileNameBuilder outputFileNameBuilder;
+
+    @Inject
+    MovieFileNameResolver movieFileNameResolver;
 
     @Inject
     MediaFileNameParsingAiService mediaFileNameParsingAiService;
@@ -87,10 +92,7 @@ public class QueuedFileTaskProcessor {
 
         String normalizedTitle = mediaTitleNormalizer.normalize(parsedInfo.name());
         String extension = extensionOf(originalFileName);
-
-        String outputFileName = task.singleEpisodeOnly()
-                ? outputFileNameBuilder.buildSingleEpisode(normalizedTitle, extension)
-                : outputFileNameBuilder.build(normalizedTitle, parsedInfo.season(), parsedInfo.episode(), extension);
+        String editionTag = task.singleEpisodeOnly() ? movieFileNameResolver.extractEditionTag(originalFileName) : null;
 
         Path targetRootDirectory = task.targetRootDirectory();
         Files.createDirectories(targetRootDirectory);
@@ -98,26 +100,31 @@ public class QueuedFileTaskProcessor {
         Path targetDirectory = targetRootDirectory.resolve(normalizedTitle);
         Files.createDirectories(targetDirectory);
 
+        String outputFileName = task.singleEpisodeOnly()
+                ? movieFileNameResolver.resolveUniqueFileName(targetDirectory, normalizedTitle, editionTag, extension, Set.of())
+                : outputFileNameBuilder.build(normalizedTitle, parsedInfo.season(), parsedInfo.episode(), extension);
+
         if (mediaAssetPersistenceService.shouldPersistAsSubtitleOnly(extension)
                 && !mediaAssetPersistenceService.hasAssetRecord(parsedInfo, normalizedTitle, targetDirectory, task.singleEpisodeOnly())) {
             retry(task, "字幕文件对应的主媒体记录不存在");
             return;
         }
 
-        Path targetFile = targetDirectory.resolve(outputFileName);
+        Path targetFile = resolveSafeTargetFile(targetDirectory, outputFileName, sourceFile.getFileName().toString());
         if (sourceFile.equals(targetFile)) {
             log.info("文件已在目标位置: {}", sourceFile);
             return;
         }
 
-        Files.move(sourceFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
+        Files.move(sourceFile, targetFile);
         mediaAssetPersistenceService.persistByExtension(
                 parsedInfo,
                 normalizedTitle,
                 extension,
                 targetDirectory,
                 targetFile,
-                task.singleEpisodeOnly());
+                task.singleEpisodeOnly(),
+                editionTag);
         log.info("处理成功: {} -> {}", sourceFile, targetFile);
     }
 
@@ -152,5 +159,40 @@ public class QueuedFileTaskProcessor {
             return "";
         }
         return fileName.substring(dotIndex + 1);
+    }
+
+    private Path resolveSafeTargetFile(Path targetDirectory, String desiredFileName, String sourceFileName) {
+        if (desiredFileName.equals(sourceFileName)) {
+            return targetDirectory.resolve(desiredFileName);
+        }
+
+        Path desired = targetDirectory.resolve(desiredFileName);
+        if (!Files.exists(desired)) {
+            return desired;
+        }
+
+        String extension = extensionOf(desiredFileName);
+        String baseName = stripExtension(desiredFileName);
+        String suffix = extension.isBlank() ? "" : "." + extension;
+        Set<String> reserved = new HashSet<>();
+        reserved.add(desiredFileName);
+
+        int index = 2;
+        String candidate = baseName + "_" + index + suffix;
+        while (reserved.contains(candidate) || Files.exists(targetDirectory.resolve(candidate))) {
+            index++;
+            candidate = baseName + "_" + index + suffix;
+        }
+
+        log.warn("检测到目标文件已存在，自动改名避免覆盖: {} -> {}", desiredFileName, candidate);
+        return targetDirectory.resolve(candidate);
+    }
+
+    private String stripExtension(String fileName) {
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0) {
+            return fileName;
+        }
+        return fileName.substring(0, dotIndex);
     }
 }

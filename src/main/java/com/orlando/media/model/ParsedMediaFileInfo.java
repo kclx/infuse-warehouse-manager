@@ -9,7 +9,7 @@ public record ParsedMediaFileInfo(String name, Integer season, Integer episode, 
         return name != null
                 && !name.isBlank()
                 && season != null
-                && season > 0
+                && season >= 0
                 && episode != null
                 && episode > 0;
     }

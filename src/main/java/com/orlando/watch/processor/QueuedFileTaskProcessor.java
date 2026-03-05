@@ -4,6 +4,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.orlando.media.ai.MediaFileNameParsingAiService;
 import com.orlando.media.model.ParsedMediaFileInfo;
@@ -31,6 +33,8 @@ import lombok.extern.slf4j.Slf4j;
 public class QueuedFileTaskProcessor {
 
     private static final int MAX_RETRY_COUNT = 3;
+    private static final Pattern S_E_PATTERN = Pattern.compile("(?i).*?(?:^|[._\\-\\s])s(?<season>\\d{1,2})[._\\-\\s]*e(?<episode>\\d{1,3})(?:$|[._\\-\\s]).*");
+    private static final Pattern X_PATTERN = Pattern.compile("(?i).*?(?<season>\\d{1,2})x(?<episode>\\d{1,3}).*");
 
     @Inject
     FileWatchTaskQueue fileWatchTaskQueue;
@@ -87,6 +91,7 @@ public class QueuedFileTaskProcessor {
     private void processFileTask(FileWatchTask task, Path sourceFile) throws Exception {
         String originalFileName = sourceFile.getFileName().toString();
         ParsedMediaFileInfo parsedInfo = mediaFileNameParsingAiService.parse(originalFileName);
+        parsedInfo = normalizeParsedInfoFromFileName(originalFileName, parsedInfo);
         log.info("fileNameParse: {}", parsedInfo);
 
         if (!isUsableForTask(parsedInfo, task.singleEpisodeOnly())) {
@@ -157,7 +162,80 @@ public class QueuedFileTaskProcessor {
         if (singleEpisodeOnly) {
             return true;
         }
-        return parsedInfo.isUsable();
+        return parsedInfo.season() != null
+                && parsedInfo.season() >= 0
+                && parsedInfo.episode() != null
+                && parsedInfo.episode() > 0;
+    }
+
+    private ParsedMediaFileInfo normalizeParsedInfoFromFileName(String fileName, ParsedMediaFileInfo parsedInfo) {
+        if (parsedInfo == null) {
+            return null;
+        }
+
+        EpisodeHint hint = extractEpisodeHint(fileName);
+        if (hint == null) {
+            return parsedInfo;
+        }
+
+        Integer season = parsedInfo.season();
+        Integer episode = parsedInfo.episode();
+        boolean changed = false;
+
+        if (hint.season() != null) {
+            // 文件名显式是 S00 时，强制按特别篇季处理。
+            if (hint.season() == 0 && (season == null || season != 0)) {
+                season = 0;
+                changed = true;
+            } else if (season == null || season < 0) {
+                season = hint.season();
+                changed = true;
+            }
+        }
+
+        if (hint.episode() != null && (episode == null || episode <= 0)) {
+            episode = hint.episode();
+            changed = true;
+        }
+
+        if (!changed) {
+            return parsedInfo;
+        }
+
+        return new ParsedMediaFileInfo(
+                parsedInfo.name(),
+                season,
+                episode,
+                parsedInfo.confidence(),
+                parsedInfo.reason());
+    }
+
+    private EpisodeHint extractEpisodeHint(String fileName) {
+        String baseName = stripExtension(fileName);
+
+        Matcher sEMatcher = S_E_PATTERN.matcher(baseName);
+        if (sEMatcher.matches()) {
+            return new EpisodeHint(
+                    parseInteger(sEMatcher.group("season")),
+                    parseInteger(sEMatcher.group("episode")));
+        }
+
+        Matcher xMatcher = X_PATTERN.matcher(baseName);
+        if (xMatcher.matches()) {
+            return new EpisodeHint(
+                    parseInteger(xMatcher.group("season")),
+                    parseInteger(xMatcher.group("episode")));
+        }
+
+        return null;
+    }
+
+    private Integer parseInteger(String value) {
+        try {
+            return Integer.parseInt(value);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private void retry(FileWatchTask task, String reason) {
@@ -216,5 +294,8 @@ public class QueuedFileTaskProcessor {
             return fileName;
         }
         return fileName.substring(0, dotIndex);
+    }
+
+    private record EpisodeHint(Integer season, Integer episode) {
     }
 }

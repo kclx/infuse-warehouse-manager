@@ -56,8 +56,11 @@ public class WatchConfigurationSyncService {
 
     private Map<String, String> buildCurrentConfigSnapshot() {
         Map<String, String> snapshot = new LinkedHashMap<>();
-        snapshot.put("watch.path", watchProcessingConfig.path());
-        snapshot.put("watch.target-path", watchProcessingConfig.targetPath());
+        for (Map.Entry<String, WatchProcessingConfig.Group> entry : watchProcessingConfig.groups().entrySet()) {
+            String groupKeyPrefix = "watch.group." + entry.getKey();
+            snapshot.put(groupKeyPrefix + ".path", entry.getValue().path());
+            snapshot.put(groupKeyPrefix + ".target-path", entry.getValue().targetPath());
+        }
         snapshot.put("watch.allow-file-names", joinSet(watchProcessingConfig.allowFileNames()));
         snapshot.put("watch.filename.pattern", watchProcessingConfig.filename().pattern());
         snapshot.put(

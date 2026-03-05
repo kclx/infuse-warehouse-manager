@@ -1,5 +1,6 @@
 package com.orlando.watch.config;
 
+import java.util.Map;
 import java.util.Set;
 
 import io.smallrye.config.ConfigMapping;
@@ -12,12 +13,8 @@ import io.smallrye.config.WithName;
 @ConfigMapping(prefix = "watch")
 public interface WatchProcessingConfig {
 
-    @WithDefault("/Users/orlando/Documents/Program/warehouse-manager/data")
-    String path();
-
-    @WithName("target-path")
-    @WithDefault("/Users/orlando/Documents/Program/warehouse-manager/data/data-target")
-    String targetPath();
+    @WithName("group")
+    Map<String, Group> groups();
 
     @WithName("allow-file-names")
     @WithDefault("re:.*\\\\.(mp4|mkv|ass|ssa|srt|vtt)$")
@@ -30,26 +27,29 @@ public interface WatchProcessingConfig {
 
     interface Filename {
 
-        @WithDefault("{name}_s{snumber}.e{enumber}.{ext}")
         String pattern();
 
         @WithName("season-number-width")
-        @WithDefault("2")
         int seasonNumberWidth();
 
         @WithName("episode-number-width")
-        @WithDefault("2")
         int episodeNumberWidth();
     }
 
     interface Database {
 
         @WithName("asset-file-extensions")
-        @WithDefault("mp4,mkv")
         Set<String> assetFileExtensions();
 
         @WithName("subtitle-file-extensions")
-        @WithDefault("ass,srt,ssa,vtt")
         Set<String> subtitleFileExtensions();
+    }
+
+    interface Group {
+
+        String path();
+
+        @WithName("target-path")
+        String targetPath();
     }
 }

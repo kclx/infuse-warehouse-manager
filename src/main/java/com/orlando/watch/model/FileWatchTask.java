@@ -5,13 +5,13 @@ import java.nio.file.Path;
 /**
  * 文件系统监听器产生的不可变任务对象。
  */
-public record FileWatchTask(Path watchBaseDirectory, String relativeFileName, int retryCount) {
+public record FileWatchTask(Path sourceRootDirectory, Path targetRootDirectory, String relativeFileName, int retryCount) {
 
     public Path absolutePath() {
-        return watchBaseDirectory.resolve(relativeFileName);
+        return sourceRootDirectory.resolve(relativeFileName);
     }
 
     public FileWatchTask nextRetry() {
-        return new FileWatchTask(watchBaseDirectory, relativeFileName, retryCount + 1);
+        return new FileWatchTask(sourceRootDirectory, targetRootDirectory, relativeFileName, retryCount + 1);
     }
 }

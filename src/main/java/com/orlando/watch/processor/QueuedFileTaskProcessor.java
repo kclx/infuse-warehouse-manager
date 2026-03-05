@@ -2,12 +2,10 @@ package com.orlando.watch.processor;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 
 import com.orlando.media.ai.MediaFileNameParsingAiService;
 import com.orlando.media.model.ParsedMediaFileInfo;
-import com.orlando.watch.config.WatchProcessingConfig;
 import com.orlando.watch.model.FileWatchTask;
 import com.orlando.watch.naming.MediaTitleNormalizer;
 import com.orlando.watch.naming.OutputFileNameBuilder;
@@ -33,9 +31,6 @@ public class QueuedFileTaskProcessor {
 
     @Inject
     FileWatchTaskQueue fileWatchTaskQueue;
-
-    @Inject
-    WatchProcessingConfig watchProcessingConfig;
 
     @Inject
     FileReadinessProbe fileReadinessProbe;
@@ -99,7 +94,7 @@ public class QueuedFileTaskProcessor {
                 parsedInfo.episode(),
                 extension);
 
-        Path targetRootDirectory = Paths.get(watchProcessingConfig.targetPath());
+        Path targetRootDirectory = task.targetRootDirectory();
         Files.createDirectories(targetRootDirectory);
 
         Path targetDirectory = targetRootDirectory.resolve(normalizedTitle);

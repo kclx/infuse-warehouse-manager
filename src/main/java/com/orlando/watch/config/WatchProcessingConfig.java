@@ -25,6 +25,7 @@ public interface WatchProcessingConfig {
 
     Filename filename();
 
+    @WithName("db")
     Database database();
 
     interface Filename {
